@@ -1,0 +1,91 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered campus user profile with student verification status and subscription plan.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique user ID" },
+        "displayName": { "type": "string", "maxLength": 100, "description": "Student full name" },
+        "email": { "type": "string", "maxLength": 150, "description": "Institutional or student email" },
+        "photoURL": { "type": "string", "maxLength": 500, "description": "Profile picture URL" },
+        "isVerifiedStudent": { "type": "boolean", "description": "True if student domain @dgu.ac.in is verified" },
+        "hostelHub": { "type": "string", "maxLength": 100, "description": "Associated campus or PG docking hub" },
+        "activePlan": { "type": "string", "enum": ["NONE", "TRIAL_3DAY", "MONTHLY_PASS"], "description": "Active subscription plan" },
+        "walletBalance": { "type": "number", "description": "Cash/escrow wallet balance in INR" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of account creation" }
+      },
+      "required": ["uid", "email", "isVerifiedStudent", "activePlan"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Campus fleet micro-mobility asset (bicycle or e-scooter).",
+      "type": "object",
+      "properties": {
+        "vehicleId": { "type": "string", "maxLength": 64, "description": "Vehicle asset tag" },
+        "type": { "type": "string", "enum": ["BICYCLE", "E_SCOOTER"], "description": "Type of vehicle" },
+        "currentHub": { "type": "string", "maxLength": 100, "description": "Current docking hub" },
+        "status": { "type": "string", "enum": ["AVAILABLE", "IN_USE", "MAINTENANCE"], "description": "Fleet status" },
+        "batteryPercent": { "type": "number", "description": "Battery state of charge percentage" },
+        "qrCodeKey": { "type": "string", "maxLength": 64, "description": "QR unlock secret/key" }
+      },
+      "required": ["vehicleId", "type", "currentHub", "status", "qrCodeKey"]
+    },
+    "Rental": {
+      "title": "Rental",
+      "description": "Mobility ride session or active vehicle reservation.",
+      "type": "object",
+      "properties": {
+        "rentalId": { "type": "string", "maxLength": 64, "description": "Rental booking ID" },
+        "userId": { "type": "string", "maxLength": 128, "description": "Student user UID" },
+        "vehicleId": { "type": "string", "maxLength": 64, "description": "Vehicle asset ID" },
+        "planType": { "type": "string", "enum": ["TRIAL_99", "MONTHLY_899"], "description": "Applied rate plan" },
+        "startTime": { "type": "string", "description": "Ride start timestamp" },
+        "endTime": { "type": "string", "description": "Ride end timestamp or empty if active" },
+        "pickupHub": { "type": "string", "maxLength": 100, "description": "Origin docking hub" },
+        "dropHub": { "type": "string", "maxLength": 100, "description": "Destination docking hub" },
+        "paymentStatus": { "type": "string", "enum": ["PAID", "PENDING"], "description": "Payment state" },
+        "upiTxnRef": { "type": "string", "maxLength": 100, "description": "UPI transaction reference ID" }
+      },
+      "required": ["rentalId", "userId", "vehicleId", "planType", "pickupHub", "paymentStatus"]
+    },
+    "MarketplaceItem": {
+      "title": "MarketplaceItem",
+      "description": "P2P campus re-commerce listing with buyer deposit escrow protection.",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string", "maxLength": 64, "description": "Unique item ID" },
+        "sellerId": { "type": "string", "maxLength": 128, "description": "UID of student seller" },
+        "sellerName": { "type": "string", "maxLength": 100, "description": "Student seller name" },
+        "title": { "type": "string", "maxLength": 150, "description": "Item headline" },
+        "category": { "type": "string", "enum": ["APPLIANCE", "FURNITURE", "BOOKS_NOTES", "CYCLE", "GEAR"], "description": "Item category" },
+        "price": { "type": "number", "description": "Listing price in INR" },
+        "depositEscrow": { "type": "number", "description": "Refundable inspection deposit in INR" },
+        "condition": { "type": "string", "enum": ["LIKE_NEW", "GOOD", "FAIR"], "description": "Item physical condition" },
+        "description": { "type": "string", "maxLength": 1000, "description": "Item condition & handover notes" },
+        "images": { "type": "array", "description": "Array of image URLs" },
+        "isEscrowHeld": { "type": "boolean", "description": "Whether security deposit is currently locked" },
+        "status": { "type": "string", "enum": ["AVAILABLE", "ESCROW_PENDING", "SOLD"], "description": "Trade lifecycle status" }
+      },
+      "required": ["itemId", "sellerId", "title", "category", "price", "condition", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "User" },
+      "description": "User profiles indexed by UID"
+    },
+    "/vehicles/{vehicleId}": {
+      "schema": { "$ref": "Vehicle" },
+      "description": "Public fleet vehicles status and locations"
+    },
+    "/rentals/{rentalId}": {
+      "schema": { "$ref": "Rental" },
+      "description": "Ride rentals and subscription reservations"
+    },
+    "/marketplace_items/{itemId}": {
+      "schema": { "$ref": "MarketplaceItem" },
+      "description": "Peer-to-peer campus marketplace catalog"
+    }
+  }
+}

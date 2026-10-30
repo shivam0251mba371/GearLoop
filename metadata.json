@@ -1,0 +1,6 @@
+{
+  "name": "GearLoop - Campus Mobility & Re-Commerce",
+  "description": "Hyper-local campus mobility subscription and peer-to-peer asset re-commerce platform for university students.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
