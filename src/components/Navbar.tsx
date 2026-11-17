@@ -1,16 +1,13 @@
 import React from 'react';
-import { 
-  Zap, 
-  Bike, 
-  ShoppingBag, 
-  Navigation, 
-  Clock, 
-  QrCode, 
-  Plus, 
-  UserCheck, 
-  Wallet,
-  ShieldCheck,
-  ChevronDown
+import {
+  Zap,
+  Bike,
+  ShoppingBag,
+  Clock,
+  QrCode,
+  Plus,
+  Mail,
+  LogIn
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
@@ -28,12 +25,16 @@ export const Navbar: React.FC<NavbarProps> = ({
   setActiveTab,
   onOpenProfile
 }) => {
-  const { currentUser, loginWithGoogle } = useAuth();
-  const { 
-    activeRide, 
-    setOpenQrScannerModal, 
-    setOpenPostItemModal 
+  const { currentUser, isDemoSession, openLoginModal } = useAuth();
+  const {
+    activeRide,
+    setOpenQrScannerModal,
+    setOpenPostItemModal
   } = useApp();
+
+  const firstName = currentUser
+    ? (currentUser.displayName?.trim() || currentUser.email.split('@')[0] || 'User').split(' ')[0]
+    : '';
 
   return (
     <header className="sticky top-0 z-40 w-full bg-slate-950/85 backdrop-blur-xl border-b border-slate-800/80">
@@ -41,7 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center justify-between h-20 gap-4">
           {/* Logo & Campus Tag */}
           <div className="flex items-center gap-3">
-            <button 
+            <button
               onClick={() => setActiveTab('MOBILITY')}
               className="flex items-center gap-2.5 text-left group"
             >
@@ -105,7 +106,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
 
           {/* Right Actions */}
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             {/* Quick QR Scanner button */}
             <button
               onClick={() => setOpenQrScannerModal(true)}
@@ -126,15 +127,27 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="hidden lg:inline text-xs font-bold text-slate-200">Sell Asset</span>
             </button>
 
+            {/* Explicit Email Login trigger when in demo mode */}
+            {currentUser && isDemoSession && (
+              <button
+                onClick={openLoginModal}
+                className="px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition flex items-center gap-1.5"
+                title="Sign in with your own Email ID"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Email Login</span>
+              </button>
+            )}
+
             {/* Student Profile / Login Trigger */}
             {currentUser ? (
               <button
                 onClick={onOpenProfile}
-                className="flex items-center gap-2.5 p-1.5 pl-2 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-800 transition"
+                className="flex items-center gap-2.5 p-1.5 pl-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-800 transition"
               >
                 <div className="text-right hidden sm:block">
-                  <div className="flex items-center gap-1 text-xs font-bold text-white">
-                    <span>{currentUser.displayName.split(' ')[0]}</span>
+                  <div className="flex items-center justify-end gap-1 text-xs font-bold text-white">
+                    <span>{firstName}</span>
                     {currentUser.isVerifiedStudent && (
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                     )}
@@ -147,7 +160,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="relative">
                   <img
                     src={currentUser.photoURL}
-                    alt={currentUser.displayName}
+                    alt={currentUser.displayName || currentUser.email}
                     className="w-8 h-8 rounded-xl object-cover border border-slate-700"
                   />
                   {currentUser.isVerifiedStudent && (
@@ -159,10 +172,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             ) : (
               <button
-                onClick={loginWithGoogle}
-                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl transition shadow-lg shadow-emerald-500/20"
+                onClick={openLoginModal}
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl transition shadow-lg shadow-emerald-500/20 flex items-center gap-1.5"
               >
-                Sign In with Google
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Sign In with Email</span>
               </button>
             )}
           </div>

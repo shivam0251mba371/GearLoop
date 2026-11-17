@@ -1,16 +1,9 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, Auth } from 'firebase/auth';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { getFirestore, Firestore, doc, getDocFromServer } from 'firebase/firestore';
 import configData from '../firebase-applet-config.json';
 
-const activeConfig = configData || {
-  apiKey: "AIzaSyDemo-GearLoop-DGU-Key12345678",
-  authDomain: "gearloop-dgu.firebaseapp.com",
-  projectId: "gearloop-dgu-prod",
-  storageBucket: "gearloop-dgu.appspot.com",
-  messagingSenderId: "492956416957",
-  appId: "1:492956416957:web:9c84e92a83"
-};
+const activeConfig = configData;
 
 let app: FirebaseApp;
 let auth: Auth;
@@ -25,7 +18,7 @@ try {
   }
 
   auth = getAuth(app);
-  db = getFirestore(app);
+  db = getFirestore(app, activeConfig.firestoreDatabaseId);
 } catch (error) {
   console.warn('Firebase initialization notice:', error);
   if (!getApps().length) {
@@ -34,15 +27,77 @@ try {
     app = getApp();
   }
   auth = getAuth(app);
-  db = getFirestore(app);
+  db = getFirestore(app, activeConfig.firestoreDatabaseId);
   isConfigured = false;
 }
 
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({
-  prompt: 'select_account',
-  hd: 'dgu.ac.in' // DBS Global University domain hint
+  prompt: 'select_account'
 });
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+testConnection();
 
 export { app, auth, db, isConfigured };
 export default app;

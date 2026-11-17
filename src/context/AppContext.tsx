@@ -1,18 +1,26 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { 
-  Vehicle, 
-  MarketplaceItem, 
-  Rental, 
-  CampusHub, 
-  ItemCategory, 
-  ItemCondition 
+import {
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  query,
+  where
+} from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../firebaseConfig';
+import {
+  Vehicle,
+  MarketplaceItem,
+  Rental,
+  CampusHub
 } from '../types';
-import { 
-  CAMPUS_HUBS, 
-  INITIAL_VEHICLES, 
-  INITIAL_MARKETPLACE_ITEMS, 
-  INITIAL_RENTALS 
+import {
+  CAMPUS_HUBS,
+  INITIAL_VEHICLES,
+  INITIAL_MARKETPLACE_ITEMS,
+  INITIAL_RENTALS
 } from '../data/seedData';
 import { useAuth } from './AuthContext';
 
@@ -26,23 +34,23 @@ interface AppContextType {
   activeRide: Rental | null;
   activeRideElapsedSeconds: number;
   activeVehicle: Vehicle | null;
-  
+
   // Mobility Actions
   startRide: (vehicleId: string, planType: 'TRIAL_99' | 'MONTHLY_899' | 'PAY_PER_RIDE') => boolean;
   endRide: (dropHubName: string) => Rental | null;
   unlockVehicleByQr: (qrCode: string) => { success: boolean; vehicle?: Vehicle; message: string };
-  
+
   // Marketplace Actions
   createMarketplaceItem: (item: Omit<MarketplaceItem, 'itemId' | 'createdAt' | 'status' | 'isEscrowHeld'>) => void;
   lockEscrowForItem: (itemId: string, upiTxnRef: string) => boolean;
   completeEscrowPickup: (itemId: string) => boolean;
   cancelEscrowHold: (itemId: string) => boolean;
-  
+
   // Notification Toast
   toastMessage: string | null;
   showToast: (msg: string) => void;
   clearToast: () => void;
-  
+
   // UI helpers
   openQrScannerModal: boolean;
   setOpenQrScannerModal: (open: boolean) => void;
@@ -53,11 +61,11 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { currentUser } = useAuth();
-  
+  const { currentUser, firebaseUser } = useAuth();
+
   const [hubs] = useState<CampusHub[]>(CAMPUS_HUBS);
   const [selectedHub, setSelectedHub] = useState<CampusHub>(CAMPUS_HUBS[0]);
-  
+
   const [vehicles, setVehicles] = useState<Vehicle[]>(() => {
     const saved = localStorage.getItem('gearloop_vehicles');
     return saved ? JSON.parse(saved) : INITIAL_VEHICLES;
@@ -83,6 +91,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [openQrScannerModal, setOpenQrScannerModal] = useState<boolean>(false);
   const [openPostItemModal, setOpenPostItemModal] = useState<boolean>(false);
 
+  // Sync Firestore collections when authenticated & email verified
+  useEffect(() => {
+    if (!firebaseUser || !firebaseUser.emailVerified) return;
+
+    const vehiclesPath = 'vehicles';
+    const unsubVehicles = onSnapshot(
+      collection(db, vehiclesPath),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const loaded = snapshot.docs.map((d) => d.data() as Vehicle);
+          setVehicles(loaded);
+        }
+      },
+      (error) => {
+        if (error.message.includes('Missing or insufficient permissions')) {
+          handleFirestoreError(error, OperationType.LIST, vehiclesPath);
+        }
+      }
+    );
+
+    const marketPath = 'marketplace_items';
+    const unsubMarket = onSnapshot(
+      collection(db, marketPath),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const loaded = snapshot.docs.map((d) => d.data() as MarketplaceItem);
+          setMarketplaceItems(loaded);
+        }
+      },
+      (error) => {
+        if (error.message.includes('Missing or insufficient permissions')) {
+          handleFirestoreError(error, OperationType.LIST, marketPath);
+        }
+      }
+    );
+
+    const rentalsPath = 'rentals';
+    const rentalsQuery = query(
+      collection(db, rentalsPath),
+      where('userId', '==', firebaseUser.uid)
+    );
+    const unsubRentals = onSnapshot(
+      rentalsQuery,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const loaded = snapshot.docs.map((d) => d.data() as Rental);
+          setRentals(loaded.sort((a, b) => b.startTime.localeCompare(a.startTime)));
+        }
+      },
+      (error) => {
+        if (error.message.includes('Missing or insufficient permissions')) {
+          handleFirestoreError(error, OperationType.LIST, rentalsPath);
+        }
+      }
+    );
+
+    return () => {
+      unsubVehicles();
+      unsubMarket();
+      unsubRentals();
+    };
+  }, [firebaseUser]);
+
   // Sync state to local storage
   useEffect(() => {
     localStorage.setItem('gearloop_vehicles', JSON.stringify(vehicles));
@@ -106,7 +177,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Active ride timer increment
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
     if (activeRide) {
       const startMs = new Date(activeRide.startTime).getTime();
       const initialElapsed = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
@@ -134,12 +205,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const clearToast = () => setToastMessage(null);
 
-  const activeVehicle = activeRide 
-    ? vehicles.find(v => v.vehicleId === activeRide.vehicleId) || null
+  const activeVehicle = activeRide
+    ? vehicles.find((v) => v.vehicleId === activeRide.vehicleId) || null
     : null;
 
-  const startRide = (vehicleId: string, planType: 'TRIAL_99' | 'MONTHLY_899' | 'PAY_PER_RIDE'): boolean => {
-    const vehicle = vehicles.find(v => v.vehicleId === vehicleId);
+  const canWriteToFirestore = Boolean(firebaseUser && firebaseUser.emailVerified);
+
+  const startRide = (
+    vehicleId: string,
+    planType: 'TRIAL_99' | 'MONTHLY_899' | 'PAY_PER_RIDE'
+  ): boolean => {
+    const vehicle = vehicles.find((v) => v.vehicleId === vehicleId);
     if (!vehicle) {
       showToast('Error: Vehicle not found.');
       return false;
@@ -149,17 +225,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
 
+    const rentalId = `rent-${Date.now().toString().slice(-6)}`;
     const newRental: Rental = {
-      rentalId: `rent-${Date.now().toString().slice(-6)}`,
+      rentalId,
       userId: currentUser?.uid || 'guest-user',
-      userName: currentUser?.displayName || 'Campus Scholar',
+      userName: (currentUser?.displayName || 'Campus Scholar').slice(0, 100),
       vehicleId: vehicle.vehicleId,
       vehicleType: vehicle.type,
-      vehicleModel: vehicle.modelName,
+      vehicleModel: vehicle.modelName.slice(0, 120),
       planType,
       startTime: new Date().toISOString(),
       endTime: null,
-      pickupHub: vehicle.currentHub,
+      pickupHub: vehicle.currentHub.slice(0, 100),
       dropHub: null,
       paymentStatus: 'PAID',
       upiTxnRef: `UPI/DGU/${Date.now().toString().slice(-8)}/RIDE`,
@@ -168,15 +245,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       durationMinutes: 0
     };
 
-    // Update vehicle to IN_USE
-    setVehicles(prev => prev.map(v => 
-      v.vehicleId === vehicleId ? { ...v, status: 'IN_USE' } : v
-    ));
+    // Update vehicle to IN_USE locally
+    setVehicles((prev) =>
+      prev.map((v) => (v.vehicleId === vehicleId ? { ...v, status: 'IN_USE' } : v))
+    );
+
+    if (canWriteToFirestore && firebaseUser) {
+      const vehiclePath = `vehicles/${vehicleId}`;
+      const rentalPath = `rentals/${rentalId}`;
+      void (async () => {
+        try {
+          // Ensure vehicle doc exists before rental creation (Global Consistency Invariant)
+          await setDoc(doc(db, 'vehicles', vehicleId), {
+            vehicleId: vehicle.vehicleId,
+            type: vehicle.type,
+            modelName: vehicle.modelName.slice(0, 120),
+            currentHub: vehicle.currentHub.slice(0, 100),
+            status: 'IN_USE',
+            batteryPercent: vehicle.batteryPercent,
+            qrCodeKey: vehicle.qrCodeKey
+          });
+          await setDoc(doc(db, 'rentals', rentalId), {
+            ...newRental,
+            userId: firebaseUser.uid
+          });
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+            handleFirestoreError(err, OperationType.WRITE, `${vehiclePath} | ${rentalPath}`);
+          }
+        }
+      })();
+    }
 
     setActiveRide(newRental);
     showToast(`Trip started! ${vehicle.modelName} unlocked at ${vehicle.currentHub}`);
 
-    // Trigger celebration
     try {
       confetti({
         particleCount: 50,
@@ -193,36 +296,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const endTime = new Date().toISOString();
     const durationMinutes = Math.max(1, Math.round(activeRideElapsedSeconds / 60));
-    // Estimate distance based on vehicle type and time (~18 km/h for EV, ~12 km/h for cycle)
     const speedKmh = activeRide.vehicleType === 'E_SCOOTER' ? 18 : 12;
     const distanceKm = Number(((durationMinutes / 60) * speedKmh).toFixed(2));
-    const carbonSavedKg = Number((distanceKm * 0.192).toFixed(2)); // vs petrol moped
+    const carbonSavedKg = Number((distanceKm * 0.192).toFixed(2));
+    const totalCost = activeRide.planType === 'PAY_PER_RIDE' ? Math.round(durationMinutes * 2) : 0;
 
     const completedRental: Rental = {
       ...activeRide,
       endTime,
-      dropHub: dropHubName,
+      dropHub: dropHubName.slice(0, 100),
       durationMinutes,
       distanceKm,
       carbonSavedKg,
-      totalCost: activeRide.planType === 'PAY_PER_RIDE' ? Math.round(durationMinutes * 2) : 0
+      totalCost
     };
 
-    // Update vehicle back to AVAILABLE at dropHub
-    setVehicles(prev => prev.map(v => {
-      if (v.vehicleId === activeRide.vehicleId) {
-        const drain = v.type === 'E_SCOOTER' && v.batteryPercent ? Math.min(v.batteryPercent, Math.round(distanceKm * 2)) : 0;
-        return {
-          ...v,
-          status: 'AVAILABLE',
-          currentHub: dropHubName,
-          batteryPercent: v.batteryPercent ? Math.max(15, v.batteryPercent - drain) : null
-        };
-      }
-      return v;
-    }));
+    const currentVeh = vehicles.find((v) => v.vehicleId === activeRide.vehicleId);
+    const nextBattery =
+      currentVeh && currentVeh.type === 'E_SCOOTER' && currentVeh.batteryPercent !== null
+        ? Math.max(15, currentVeh.batteryPercent - Math.min(currentVeh.batteryPercent, Math.round(distanceKm * 2)))
+        : null;
 
-    setRentals(prev => [completedRental, ...prev]);
+    setVehicles((prev) =>
+      prev.map((v) => {
+        if (v.vehicleId === activeRide.vehicleId) {
+          return {
+            ...v,
+            status: 'AVAILABLE',
+            currentHub: dropHubName,
+            batteryPercent: nextBattery
+          };
+        }
+        return v;
+      })
+    );
+
+    if (canWriteToFirestore) {
+      void (async () => {
+        try {
+          await updateDoc(doc(db, 'vehicles', activeRide.vehicleId), {
+            status: 'AVAILABLE',
+            currentHub: dropHubName.slice(0, 100),
+            batteryPercent: nextBattery
+          });
+          await updateDoc(doc(db, 'rentals', activeRide.rentalId), {
+            endTime,
+            dropHub: dropHubName.slice(0, 100),
+            durationMinutes,
+            distanceKm,
+            carbonSavedKg,
+            totalCost
+          });
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+            handleFirestoreError(err, OperationType.UPDATE, `rentals/${activeRide.rentalId}`);
+          }
+        }
+      })();
+    }
+
+    setRentals((prev) => [completedRental, ...prev]);
     setActiveRide(null);
     showToast(`Ride ended successfully! Locked at ${dropHubName}. Saved ${carbonSavedKg} kg CO₂.`);
 
@@ -237,11 +370,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return completedRental;
   };
 
-  const unlockVehicleByQr = (qrCode: string): { success: boolean; vehicle?: Vehicle; message: string } => {
+  const unlockVehicleByQr = (
+    qrCode: string
+  ): { success: boolean; vehicle?: Vehicle; message: string } => {
     const cleaned = qrCode.trim().toUpperCase();
-    const vehicle = vehicles.find(v => 
-      v.qrCodeKey.toUpperCase() === cleaned || 
-      v.vehicleId.toUpperCase() === cleaned
+    const vehicle = vehicles.find(
+      (v) => v.qrCodeKey.toUpperCase() === cleaned || v.vehicleId.toUpperCase() === cleaned
     );
 
     if (!vehicle) {
@@ -249,26 +383,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (vehicle.status !== 'AVAILABLE') {
-      return { success: false, vehicle, message: `Vehicle is currently ${vehicle.status}. Please pick an available one.` };
+      return {
+        success: false,
+        vehicle,
+        message: `Vehicle is currently ${vehicle.status}. Please pick an available one.`
+      };
     }
 
     if (vehicle.type === 'E_SCOOTER' && (vehicle.batteryPercent ?? 0) < 15) {
-      return { success: false, vehicle, message: `Battery too low (${vehicle.batteryPercent}%). Choose another docked EV.` };
+      return {
+        success: false,
+        vehicle,
+        message: `Battery too low (${vehicle.batteryPercent}%). Choose another docked EV.`
+      };
     }
 
-    return { success: true, vehicle, message: `Found ${vehicle.modelName} at ${vehicle.currentHub}` };
+    return {
+      success: true,
+      vehicle,
+      message: `Found ${vehicle.modelName} at ${vehicle.currentHub}`
+    };
   };
 
-  const createMarketplaceItem = (itemData: Omit<MarketplaceItem, 'itemId' | 'createdAt' | 'status' | 'isEscrowHeld'>) => {
+  const createMarketplaceItem = (
+    itemData: Omit<MarketplaceItem, 'itemId' | 'createdAt' | 'status' | 'isEscrowHeld'>
+  ) => {
+    const itemId = `item-${Date.now().toString().slice(-6)}`;
     const newItem: MarketplaceItem = {
       ...itemData,
-      itemId: `item-${Date.now().toString().slice(-6)}`,
+      itemId,
+      sellerId: firebaseUser?.uid || itemData.sellerId,
+      sellerName: itemData.sellerName.slice(0, 100),
+      title: itemData.title.slice(0, 150),
+      description: itemData.description.slice(0, 1000),
+      hubLocation: itemData.hubLocation.slice(0, 100),
+      images: itemData.images.slice(0, 5),
       createdAt: new Date().toISOString(),
       status: 'AVAILABLE',
       isEscrowHeld: false
     };
 
-    setMarketplaceItems(prev => [newItem, ...prev]);
+    setMarketplaceItems((prev) => [newItem, ...prev]);
+
+    if (canWriteToFirestore && firebaseUser) {
+      // Strip sellerEmail from public marketplace listing to comply with PII isolation
+      const { sellerEmail: _omittedEmail, ...publicDoc } = newItem;
+      void setDoc(doc(db, 'marketplace_items', itemId), {
+        ...publicDoc,
+        sellerId: firebaseUser.uid
+      }).catch((err) => {
+        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+          handleFirestoreError(err, OperationType.CREATE, `marketplace_items/${itemId}`);
+        }
+      });
+    }
+
     showToast(`Your asset "${newItem.title}" has been listed on the DBS Campus Marketplace!`);
 
     try {
@@ -280,41 +449,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
   };
 
-  const lockEscrowForItem = (itemId: string, upiTxnRef: string): boolean => {
-    const item = marketplaceItems.find(i => i.itemId === itemId);
+  const lockEscrowForItem = (itemId: string, _upiTxnRef: string): boolean => {
+    const item = marketplaceItems.find((i) => i.itemId === itemId);
     if (!item) return false;
 
     const escrowCode = `ESC-${Math.floor(1000 + Math.random() * 9000)}`;
+    const buyerId = firebaseUser?.uid || currentUser?.uid || 'guest-buyer';
+    const buyerName = (currentUser?.displayName || 'Campus Student').slice(0, 100);
 
-    setMarketplaceItems(prev => prev.map(i => {
-      if (i.itemId === itemId) {
-        return {
-          ...i,
-          isEscrowHeld: true,
-          status: 'ESCROW_PENDING',
-          escrowBuyerId: currentUser?.uid || 'guest-buyer',
-          escrowBuyerName: currentUser?.displayName || 'Campus Student',
-          escrowCode
-        };
-      }
-      return i;
-    }));
+    setMarketplaceItems((prev) =>
+      prev.map((i) => {
+        if (i.itemId === itemId) {
+          return {
+            ...i,
+            isEscrowHeld: true,
+            status: 'ESCROW_PENDING',
+            escrowBuyerId: buyerId,
+            escrowBuyerName: buyerName,
+            escrowCode
+          };
+        }
+        return i;
+      })
+    );
 
-    showToast(`Escrow Locked! Deposit held securely in GearShield. Share PIN ${escrowCode} only upon campus inspection.`);
+    if (canWriteToFirestore && firebaseUser) {
+      void updateDoc(doc(db, 'marketplace_items', itemId), {
+        status: 'ESCROW_PENDING',
+        isEscrowHeld: true,
+        escrowBuyerId: firebaseUser.uid,
+        escrowBuyerName: buyerName,
+        escrowCode
+      }).catch((err) => {
+        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+          handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+        }
+      });
+    }
+
+    showToast(
+      `Escrow Locked! Deposit held securely in GearShield. Share PIN ${escrowCode} only upon campus inspection.`
+    );
     return true;
   };
 
   const completeEscrowPickup = (itemId: string): boolean => {
-    setMarketplaceItems(prev => prev.map(i => {
-      if (i.itemId === itemId) {
-        return {
-          ...i,
-          status: 'SOLD',
-          isEscrowHeld: false
-        };
-      }
-      return i;
-    }));
+    setMarketplaceItems((prev) =>
+      prev.map((i) => {
+        if (i.itemId === itemId) {
+          return {
+            ...i,
+            status: 'SOLD',
+            isEscrowHeld: false
+          };
+        }
+        return i;
+      })
+    );
+
+    if (canWriteToFirestore) {
+      void updateDoc(doc(db, 'marketplace_items', itemId), {
+        status: 'SOLD',
+        isEscrowHeld: false
+      }).catch((err) => {
+        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+          handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+        }
+      });
+    }
 
     showToast('Handover confirmed! GearShield escrow funds released to seller.');
     try {
@@ -328,19 +530,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const cancelEscrowHold = (itemId: string): boolean => {
-    setMarketplaceItems(prev => prev.map(i => {
-      if (i.itemId === itemId) {
-        return {
-          ...i,
-          status: 'AVAILABLE',
-          isEscrowHeld: false,
-          escrowBuyerId: undefined,
-          escrowBuyerName: undefined,
-          escrowCode: undefined
-        };
-      }
-      return i;
-    }));
+    setMarketplaceItems((prev) =>
+      prev.map((i) => {
+        if (i.itemId === itemId) {
+          return {
+            ...i,
+            status: 'AVAILABLE',
+            isEscrowHeld: false,
+            escrowBuyerId: undefined,
+            escrowBuyerName: undefined,
+            escrowCode: undefined
+          };
+        }
+        return i;
+      })
+    );
+
+    if (canWriteToFirestore) {
+      void updateDoc(doc(db, 'marketplace_items', itemId), {
+        status: 'AVAILABLE',
+        isEscrowHeld: false,
+        escrowBuyerId: null,
+        escrowBuyerName: null,
+        escrowCode: null
+      }).catch((err) => {
+        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+          handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+        }
+      });
+    }
 
     showToast('Escrow cancelled. Refund processed to student wallet / UPI.');
     return true;

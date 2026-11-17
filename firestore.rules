@@ -1,11 +1,12 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default deny all
+    // Global Safety Net - Default Deny
     match /{document=**} {
       allow read, write: if false;
     }
 
+    // Core Primitives
     function isSignedIn() {
       return request.auth != null;
     }
@@ -14,41 +15,187 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // Users collection
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprints (Anti-Update-Gap)
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'isVerifiedStudent', 'hostelHub', 'activePlan', 'walletBalance', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'isVerifiedStudent', 'hostelHub', 'activePlan', 'planExpiryDate', 'walletBalance', 'phone', 'upiId', 'studentId', 'department', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+        data.isVerifiedStudent is bool &&
+        data.hostelHub is string && data.hostelHub.size() >= 1 && data.hostelHub.size() <= 100 &&
+        data.activePlan in ['NONE', 'TRIAL_3DAY', 'MONTHLY_PASS'] &&
+        data.walletBalance is number && data.walletBalance >= 0 && data.walletBalance <= 1000000 &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+        (!('planExpiryDate' in data) || data.planExpiryDate == null || (data.planExpiryDate is string && data.planExpiryDate.size() <= 64)) &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+        (!('upiId' in data) || (data.upiId is string && data.upiId.size() <= 100)) &&
+        (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 64)) &&
+        (!('department' in data) || (data.department is string && data.department.size() <= 100));
+    }
+
+    function isValidVehicle(data) {
+      return data.keys().hasAll(['vehicleId', 'type', 'modelName', 'currentHub', 'status', 'qrCodeKey']) &&
+        data.keys().hasOnly(['vehicleId', 'type', 'modelName', 'currentHub', 'status', 'batteryPercent', 'qrCodeKey', 'rangeKm', 'ratePerMinute', 'gearCount']) &&
+        isValidId(data.vehicleId) &&
+        data.type in ['BICYCLE', 'E_SCOOTER'] &&
+        data.modelName is string && data.modelName.size() >= 1 && data.modelName.size() <= 120 &&
+        data.currentHub is string && data.currentHub.size() >= 1 && data.currentHub.size() <= 100 &&
+        data.status in ['AVAILABLE', 'IN_USE', 'MAINTENANCE'] &&
+        data.qrCodeKey is string && data.qrCodeKey.size() >= 1 && data.qrCodeKey.size() <= 64 &&
+        (!('batteryPercent' in data) || data.batteryPercent == null || (data.batteryPercent is number && data.batteryPercent >= 0 && data.batteryPercent <= 100));
+    }
+
+    function isValidRental(data) {
+      return data.keys().hasAll(['rentalId', 'userId', 'vehicleId', 'planType', 'startTime', 'pickupHub', 'paymentStatus', 'upiTxnRef']) &&
+        data.keys().hasOnly(['rentalId', 'userId', 'userName', 'vehicleId', 'vehicleType', 'vehicleModel', 'planType', 'startTime', 'endTime', 'pickupHub', 'dropHub', 'paymentStatus', 'upiTxnRef', 'durationMinutes', 'distanceKm', 'carbonSavedKg', 'totalCost']) &&
+        isValidId(data.rentalId) &&
+        isValidId(data.userId) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.vehicleId) &&
+        data.planType in ['TRIAL_99', 'MONTHLY_899', 'PAY_PER_RIDE'] &&
+        data.startTime is string && data.startTime.size() <= 64 &&
+        (!('endTime' in data) || data.endTime == null || (data.endTime is string && data.endTime.size() <= 64)) &&
+        data.pickupHub is string && data.pickupHub.size() >= 1 && data.pickupHub.size() <= 100 &&
+        (!('dropHub' in data) || data.dropHub == null || (data.dropHub is string && data.dropHub.size() <= 100)) &&
+        data.paymentStatus in ['PAID', 'PENDING'] &&
+        data.upiTxnRef is string && data.upiTxnRef.size() >= 1 && data.upiTxnRef.size() <= 100 &&
+        (!('userName' in data) || (data.userName is string && data.userName.size() <= 100)) &&
+        (!('vehicleType' in data) || data.vehicleType in ['BICYCLE', 'E_SCOOTER']) &&
+        (!('vehicleModel' in data) || (data.vehicleModel is string && data.vehicleModel.size() <= 120));
+    }
+
+    function isValidMarketplaceItem(data) {
+      return data.keys().hasAll(['itemId', 'sellerId', 'sellerName', 'title', 'category', 'price', 'depositEscrow', 'condition', 'description', 'images', 'isEscrowHeld', 'status', 'hubLocation', 'createdAt']) &&
+        data.keys().hasOnly(['itemId', 'sellerId', 'sellerName', 'sellerIsVerified', 'title', 'category', 'price', 'depositEscrow', 'condition', 'description', 'images', 'isEscrowHeld', 'status', 'hubLocation', 'createdAt', 'escrowBuyerId', 'escrowBuyerName', 'escrowCode']) &&
+        isValidId(data.itemId) &&
+        isValidId(data.sellerId) &&
+        data.sellerName is string && data.sellerName.size() >= 1 && data.sellerName.size() <= 100 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+        data.category in ['APPLIANCE', 'FURNITURE', 'BOOKS_NOTES', 'CYCLE', 'GEAR'] &&
+        data.price is number && data.price >= 0 && data.price <= 500000 &&
+        data.depositEscrow is number && data.depositEscrow >= 0 && data.depositEscrow <= 100000 &&
+        data.condition in ['LIKE_NEW', 'GOOD', 'FAIR'] &&
+        data.description is string && data.description.size() <= 1000 &&
+        data.images is list && data.images.size() >= 1 && data.images.size() <= 5 && data.images[0] is string && data.images[0].size() <= 500 &&
+        data.isEscrowHeld is bool &&
+        data.status in ['AVAILABLE', 'ESCROW_PENDING', 'SOLD'] &&
+        data.hubLocation is string && data.hubLocation.size() >= 1 && data.hubLocation.size() <= 100 &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        (!('sellerIsVerified' in data) || data.sellerIsVerified is bool) &&
+        (!('escrowBuyerId' in data) || data.escrowBuyerId == null || isValidId(data.escrowBuyerId)) &&
+        (!('escrowBuyerName' in data) || data.escrowBuyerName == null || (data.escrowBuyerName is string && data.escrowBuyerName.size() <= 100)) &&
+        (!('escrowCode' in data) || data.escrowCode == null || (data.escrowCode is string && data.escrowCode.size() <= 32));
+    }
+
+    // Health check doc
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Users collection (Strict owner-only access for PII protection)
     match /users/{userId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() && request.auth.uid == userId;
-      allow update: if isOwner(userId);
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isSignedIn() && isValidId(userId) && isOwner(userId) && isEmailVerified() &&
+        isValidUser(incoming()) &&
+        incoming().createdAt == request.time;
+      allow update: if isSignedIn() && isValidId(userId) && isOwner(userId) && isEmailVerified() &&
+        isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'photoURL', 'hostelHub', 'activePlan', 'planExpiryDate',
+          'walletBalance', 'phone', 'upiId', 'studentId', 'department', 'isVerifiedStudent', 'updatedAt'
+        ]);
       allow delete: if false;
     }
 
-    // Fleet vehicles
+    // Public mobility fleet
     match /vehicles/{vehicleId} {
-      allow get, list: if true; // Publicly visible fleet
-      allow create, update: if isSignedIn(); // In campus app, users or system can update status
+      allow get: if isValidId(vehicleId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(vehicleId) && isEmailVerified() &&
+        isValidVehicle(incoming()) &&
+        incoming().vehicleId == vehicleId;
+      allow update: if isSignedIn() && isValidId(vehicleId) && isEmailVerified() &&
+        isValidVehicle(incoming()) &&
+        incoming().vehicleId == existing().vehicleId &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'currentHub', 'batteryPercent']);
       allow delete: if false;
     }
 
-    // Rentals
+    // Rentals (Query Enforcer: user can only list/read their own rentals)
     match /rentals/{rentalId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || request.resource.data.userId == request.auth.uid);
+      allow get: if isSignedIn() && isValidId(rentalId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(rentalId) && isEmailVerified() &&
+        isValidRental(incoming()) &&
+        incoming().rentalId == rentalId &&
+        exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId));
+      allow update: if isSignedIn() && isValidId(rentalId) && isEmailVerified() &&
+        isValidRental(incoming()) &&
+        existing().userId == request.auth.uid &&
+        existing().endTime == null &&
+        incoming().rentalId == existing().rentalId &&
+        incoming().userId == existing().userId &&
+        incoming().vehicleId == existing().vehicleId &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['endTime', 'dropHub', 'durationMinutes', 'distanceKm', 'carbonSavedKg', 'totalCost']);
       allow delete: if false;
     }
 
     // Peer-to-peer marketplace items
     match /marketplace_items/{itemId} {
-      allow get, list: if true;
-      allow create: if isSignedIn() && request.resource.data.sellerId == request.auth.uid;
-      allow update: if isSignedIn(); // Seller can edit, buyer can escrow or mark sold
-      allow delete: if isSignedIn() && resource.data.sellerId == request.auth.uid;
+      allow get: if isValidId(itemId);
+      allow list: if true;
+      allow create: if isSignedIn() && isValidId(itemId) && isEmailVerified() &&
+        isValidMarketplaceItem(incoming()) &&
+        incoming().itemId == itemId &&
+        incoming().sellerId == request.auth.uid &&
+        incoming().status == 'AVAILABLE' &&
+        incoming().isEscrowHeld == false;
+      allow update: if isSignedIn() && isValidId(itemId) && isEmailVerified() &&
+        isValidMarketplaceItem(incoming()) &&
+        existing().status != 'SOLD' &&
+        incoming().itemId == existing().itemId &&
+        incoming().sellerId == existing().sellerId &&
+        incoming().createdAt == existing().createdAt && (
+          // Action: Buyer locks escrow deposit
+          (existing().status == 'AVAILABLE' && incoming().status == 'ESCROW_PENDING' && incoming().isEscrowHeld == true &&
+            incoming().escrowBuyerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'isEscrowHeld', 'escrowBuyerId', 'escrowBuyerName', 'escrowCode'])) ||
+          // Action: Complete handover (SOLD) or Cancel escrow (back to AVAILABLE)
+          (existing().status == 'ESCROW_PENDING' && (existing().escrowBuyerId == request.auth.uid || existing().sellerId == request.auth.uid) && (
+            (incoming().status == 'SOLD' && incoming().isEscrowHeld == false &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'isEscrowHeld'])) ||
+            (incoming().status == 'AVAILABLE' && incoming().isEscrowHeld == false &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'isEscrowHeld', 'escrowBuyerId', 'escrowBuyerName', 'escrowCode']))
+          )) ||
+          // Action: Seller updates listing details while available
+          (existing().sellerId == request.auth.uid && existing().status == 'AVAILABLE' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'price', 'depositEscrow', 'condition', 'description', 'hubLocation']))
+        );
+      allow delete: if isSignedIn() && isValidId(itemId) && isEmailVerified() &&
+        existing().sellerId == request.auth.uid &&
+        existing().status == 'AVAILABLE';
     }
   }
 }

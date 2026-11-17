@@ -1,9 +1,12 @@
 {
-  "apiKey": "AIzaSyDemo-GearLoop-DGU-Key12345678",
-  "authDomain": "gearloop-dgu.firebaseapp.com",
-  "projectId": "gearloop-dgu-prod",
-  "storageBucket": "gearloop-dgu.appspot.com",
-  "messagingSenderId": "492956416957",
-  "appId": "1:492956416957:web:9c84e92a83",
-  "firestoreDatabaseId": "(default)"
+  "projectId": "august-ridge-d48x0",
+  "appId": "1:1074883123187:web:443611b568e05afd8fa486",
+  "apiKey": "AIzaSyAxUyeTW6Y6cUbhpiaolAUWyv_d3hjaOAg",
+  "authDomain": "august-ridge-d48x0.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-gearloopcampusmo-aaeaf9b0-a335-458b-9f06-9976754aaa3c",
+  "storageBucket": "august-ridge-d48x0.firebasestorage.app",
+  "messagingSenderId": "1074883123187",
+  "measurementId": "",
+  "oAuthClientId": "1074883123187-le42oc96e8v9g0cugvoarugk1v0glagc.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

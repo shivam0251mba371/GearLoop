@@ -1,4 +1,19 @@
-import { app, auth, db, googleProvider, isConfigured } from './firebaseConfig.ts';
+import app, {
+  auth,
+  db,
+  googleProvider,
+  isConfigured,
+  handleFirestoreError,
+  OperationType
+} from './firebaseConfig.ts';
 
-export { app, auth, db, googleProvider, isConfigured };
+export {
+  app,
+  auth,
+  db,
+  googleProvider,
+  isConfigured,
+  handleFirestoreError,
+  OperationType
+};
 export default app;

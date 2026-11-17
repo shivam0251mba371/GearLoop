@@ -1,18 +1,17 @@
-import React, { useState } from 'react';
-import { 
-  X, 
-  UserCheck, 
-  ShieldAlert, 
-  MapPin, 
-  Phone, 
-  Wallet, 
-  CreditCard, 
-  Building2, 
-  CheckCircle2, 
-  Sparkles,
+import React, { useState, useEffect } from 'react';
+import {
+  X,
+  UserCheck,
+  ShieldAlert,
+  Phone,
+  Wallet,
+  Building2,
+  CheckCircle2,
   LogOut,
   RefreshCw,
-  Award
+  Award,
+  Mail,
+  Send
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
@@ -23,26 +22,69 @@ interface ProfileModalProps {
 }
 
 export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, updateUserProfile, switchDemoProfile, logout } = useAuth();
+  const {
+    currentUser,
+    firebaseUser,
+    isDemoSession,
+    openLoginModal,
+    updateUserProfile,
+    switchDemoProfile,
+    resendVerificationEmail,
+    refreshVerificationStatus,
+    logout
+  } = useAuth();
   const { hubs, showToast } = useApp();
 
+  const [displayName, setDisplayName] = useState(currentUser?.displayName || '');
   const [hostelHub, setHostelHub] = useState(currentUser?.hostelHub || hubs[0].name);
-  const [phone, setPhone] = useState(currentUser?.phone || '+91 98765 43210');
-  const [upiId, setUpiId] = useState(currentUser?.upiId || 'student@okaxis');
+  const [phone, setPhone] = useState(currentUser?.phone || '');
+  const [upiId, setUpiId] = useState(currentUser?.upiId || '');
+  const [studentId, setStudentId] = useState(currentUser?.studentId || '');
   const [isSaved, setIsSaved] = useState(false);
+
+  // Sync form state whenever currentUser changes or modal opens (fixes stale state bug)
+  useEffect(() => {
+    if (currentUser && isOpen) {
+      setDisplayName(currentUser.displayName || '');
+      setHostelHub(currentUser.hostelHub || hubs[0].name);
+      setPhone(currentUser.phone || '');
+      setUpiId(currentUser.upiId || '');
+      setStudentId(currentUser.studentId || '');
+    }
+  }, [currentUser, isOpen, hubs]);
 
   if (!isOpen || !currentUser) return null;
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateUserProfile({
+    await updateUserProfile({
+      displayName: displayName.trim() || currentUser.displayName,
       hostelHub,
-      phone,
-      upiId
+      phone: phone.trim(),
+      upiId: upiId.trim(),
+      studentId: studentId.trim()
     });
     setIsSaved(true);
     showToast('Campus profile & UPI settlement preferences updated!');
     setTimeout(() => setIsSaved(false), 2000);
+  };
+
+  const handleResendVerify = async () => {
+    const res = await resendVerificationEmail();
+    if (res.success) {
+      showToast(`Verification email sent to ${currentUser.email}!`);
+    } else {
+      showToast(res.error || 'Could not send verification email.');
+    }
+  };
+
+  const handleRefreshVerify = async () => {
+    const verified = await refreshVerificationStatus();
+    if (verified) {
+      showToast('Email verified! Full Firestore cloud sync is now active.');
+    } else {
+      showToast('Email not verified yet. Please click the link sent to your inbox.');
+    }
   };
 
   return (
@@ -55,11 +97,13 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
               <Award className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-white text-base">Campus Student Profile</h3>
-              <p className="text-xs text-slate-400">Institutional ID &amp; Escrow Wallet</p>
+              <h3 className="font-bold text-white text-base">Campus Account Profile</h3>
+              <p className="text-xs text-slate-400">
+                {isDemoSession ? 'Demo Preview Session' : 'Authenticated Email Account'}
+              </p>
             </div>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition"
           >
@@ -71,7 +115,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
           {/* Institutional Student ID Card Visualization */}
           <div className="relative rounded-2xl bg-gradient-to-br from-slate-950 via-indigo-950/40 to-slate-950 p-5 border border-indigo-500/30 shadow-xl overflow-hidden">
             <div className="absolute top-0 right-0 w-36 h-36 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
-            
+
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3.5">
                 <img
@@ -86,9 +130,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                       <CheckCircle2 className="w-4 h-4 text-emerald-400 fill-emerald-400/20" />
                     )}
                   </h4>
-                  <div className="text-xs font-mono text-indigo-300">{currentUser.email}</div>
+                  <div className="text-xs font-mono text-indigo-300 break-all">{currentUser.email}</div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    {currentUser.department || 'DBS Global University Scholar'}
+                    {currentUser.department || 'GearLoop Campus Member'}
                   </div>
                 </div>
               </div>
@@ -100,9 +144,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                   Verified DGU
                 </span>
               ) : (
-                <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-black flex items-center gap-1 uppercase tracking-wider shrink-0">
-                  <ShieldAlert className="w-3.5 h-3.5" />
-                  Unverified
+                <span className="px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-black flex items-center gap-1 uppercase tracking-wider shrink-0">
+                  <Mail className="w-3.5 h-3.5" />
+                  Email Member
                 </span>
               )}
             </div>
@@ -110,16 +154,75 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
             {/* Bottom info banner */}
             <div className="mt-4 pt-3 border-t border-indigo-900/40 grid grid-cols-2 gap-2 text-xs">
               <div>
-                <span className="text-[10px] text-slate-400 block">Student ID Number</span>
-                <span className="font-mono font-bold text-slate-200">{currentUser.studentId || 'DGU-2023-CS-049'}</span>
+                <span className="text-[10px] text-slate-400 block">Student / Member ID</span>
+                <span className="font-mono font-bold text-slate-200">{currentUser.studentId || 'EMAIL_MEMBER'}</span>
               </div>
               <div className="text-right">
                 <span className="text-[10px] text-slate-400 block">Current Plan</span>
                 <span className="font-bold text-emerald-400">
-                  {currentUser.activePlan === 'TRIAL_3DAY' ? '3-Day Pilot Active' : currentUser.activePlan === 'MONTHLY_PASS' ? '30-Day Monthly Pass' : 'Standard'}
+                  {currentUser.activePlan === 'TRIAL_3DAY'
+                    ? '3-Day Pilot Active'
+                    : currentUser.activePlan === 'MONTHLY_PASS'
+                    ? '30-Day Monthly Pass'
+                    : 'Standard'}
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Email Verification Banner for unverified Email/Password signups */}
+          {firebaseUser && !firebaseUser.emailVerified && (
+            <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-700/50 space-y-2.5">
+              <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Verify your email ID to enable cloud Firestore persistence</span>
+              </div>
+              <p className="text-[11px] text-amber-200/80">
+                Check your inbox for <strong>{currentUser.email}</strong> and click the verification link.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleResendVerify}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] rounded-lg transition flex items-center gap-1"
+                >
+                  <Send className="w-3 h-3" />
+                  <span>Resend Link</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRefreshVerify}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-[11px] rounded-lg transition"
+                >
+                  I Verified — Refresh
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Switch / Login with My Email ID Callout */}
+          <div className="p-4 bg-emerald-950/30 border border-emerald-500/30 rounded-2xl flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Mail className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{isDemoSession ? 'Using Demo Account' : 'Switch Email Account'}</span>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                {isDemoSession
+                  ? 'Sign in with your personal Gmail or @dgu.ac.in email ID.'
+                  : 'Sign in with another email ID or Google account.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                openLoginModal();
+              }}
+              className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition shrink-0"
+            >
+              Login with Email ID
+            </button>
           </div>
 
           {/* Quick Demo Persona Switcher for Evaluation */}
@@ -127,9 +230,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-slate-300 flex items-center gap-1.5">
                 <RefreshCw className="w-3.5 h-3.5 text-indigo-400" />
-                <span>One-Click Demo Evaluator Switcher:</span>
+                <span>Quick Demo Evaluator Switcher:</span>
               </span>
-              <span className="text-[10px] text-slate-500 font-mono">Test Domain Badges</span>
+              <span className="text-[10px] text-slate-500 font-mono">Preview Roles</span>
             </div>
             <div className="grid grid-cols-3 gap-2">
               <button
@@ -168,22 +271,44 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                 type="button"
                 onClick={() => {
                   switchDemoProfile('unverified-guest');
-                  showToast('Switched to Guest (@gmail.com) — Shows verification guard');
+                  showToast('Switched to Guest (@gmail.com) — Preview mode');
                 }}
                 className={`p-2 rounded-xl text-left border text-xs transition ${
-                  !currentUser.isVerifiedStudent
+                  currentUser.email === 'visitor.student@gmail.com'
                     ? 'bg-amber-500/20 border-amber-500 text-white font-bold'
                     : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
                 }`}
               >
-                <div className="text-[11px] font-bold">Guest User</div>
-                <div className="text-[9px] text-amber-400">@gmail.com (Unverified)</div>
+                <div className="text-[11px] font-bold">Guest Demo</div>
+                <div className="text-[9px] text-amber-400">Preview</div>
               </button>
             </div>
           </div>
 
           {/* Profile Form */}
           <form onSubmit={handleSaveProfile} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-300 font-semibold">Display Name</label>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-300 font-semibold">DGU Roll / ID Number</label>
+                <input
+                  type="text"
+                  value={studentId}
+                  onChange={(e) => setStudentId(e.target.value)}
+                  placeholder="e.g. DGU-2025-CS-101"
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm font-mono text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+
             {/* Preferred Hostel / PG Docking Hub */}
             <div className="space-y-1.5">
               <label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
@@ -195,8 +320,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                 onChange={(e) => setHostelHub(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
               >
-                {hubs.map(h => (
-                  <option key={h.id} value={h.name}>{h.name}</option>
+                {hubs.map((h) => (
+                  <option key={h.id} value={h.name}>
+                    {h.name}
+                  </option>
                 ))}
               </select>
             </div>
@@ -211,6 +338,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
                 type="text"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
+                placeholder="+91 98765 43210"
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
               />
             </div>
@@ -252,7 +380,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) =
               <button
                 type="button"
                 onClick={() => {
-                  logout();
+                  void logout();
                   onClose();
                 }}
                 className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-rose-400 font-medium text-xs rounded-xl transition flex items-center gap-1.5"

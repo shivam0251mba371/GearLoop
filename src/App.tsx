@@ -6,30 +6,28 @@ import { MobilityHub } from './components/MobilityHub';
 import { Marketplace } from './components/Marketplace';
 import { ActiveRides } from './components/ActiveRides';
 import { ProfileModal } from './components/ProfileModal';
+import { LoginModal } from './components/LoginModal';
 import { QrUnlockModal } from './components/QrUnlockModal';
-import { 
-  Zap, 
-  ShieldCheck, 
-  AlertCircle, 
-  CheckCircle2, 
-  Clock, 
-  MapPin, 
+import { ErrorBoundary } from './components/ErrorBoundary';
+import {
+  Zap,
+  ShieldCheck,
+  AlertCircle,
+  CheckCircle2,
   ArrowRight,
-  Sparkles,
-  Lock,
+  Mail,
   X
 } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
-  const { currentUser, switchDemoProfile } = useAuth();
-  const { 
-    activeRide, 
-    activeRideElapsedSeconds, 
-    activeVehicle, 
-    toastMessage, 
-    clearToast, 
-    openQrScannerModal, 
-    setOpenQrScannerModal 
+  const { currentUser, isDemoSession, openLoginModal } = useAuth();
+  const {
+    activeRide,
+    activeRideElapsedSeconds,
+    toastMessage,
+    clearToast,
+    openQrScannerModal,
+    setOpenQrScannerModal
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<TabKey>('MOBILITY');
@@ -50,7 +48,7 @@ const MainAppContent: React.FC = () => {
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>{toastMessage}</span>
           </div>
-          <button 
+          <button
             onClick={clearToast}
             className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
           >
@@ -59,21 +57,50 @@ const MainAppContent: React.FC = () => {
         </div>
       )}
 
-      {/* Institutional verification highlight banner if not verified */}
+      {/* Logged-out prompt banner */}
+      {!currentUser && (
+        <div className="bg-emerald-950/60 border-b border-emerald-800/60 px-4 py-2.5 text-xs text-emerald-200 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>
+              Sign in with your <strong>Email ID</strong> (personal Gmail or <strong>@dgu.ac.in</strong>) to unlock rides and reserve campus marketplace items.
+            </span>
+          </div>
+          <button
+            onClick={openLoginModal}
+            className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg text-[11px] transition shrink-0"
+          >
+            Sign In with Email ID
+          </button>
+        </div>
+      )}
+
+      {/* Institutional verification highlight banner if signed in with non-DGU email */}
       {currentUser && !currentUser.isVerifiedStudent && (
         <div className="bg-amber-950/60 border-b border-amber-800/60 px-4 py-2.5 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              Signed in with external domain <strong>{currentUser.email}</strong>. Switch or link your <strong>@dgu.ac.in</strong> email for instant ₹0 deposit and verified student badges.
+              Signed in with <strong>{currentUser.email}</strong>.{' '}
+              {isDemoSession
+                ? 'Log in with your own Email ID or link a @dgu.ac.in email for ₹0 deposit.'
+                : 'Add your DGU Roll ID in Profile or switch to a @dgu.ac.in email for ₹0 student deposit.'}
             </span>
           </div>
-          <button
-            onClick={() => switchDemoProfile('verified-dgu')}
-            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-[11px] transition shrink-0"
-          >
-            Switch to Verified DGU Student Demo
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setShowProfileModal(true)}
+              className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-amber-200 font-semibold rounded-lg text-[11px] border border-amber-700/40 transition"
+            >
+              Update Student ID
+            </button>
+            <button
+              onClick={openLoginModal}
+              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-[11px] transition"
+            >
+              Switch Email ID
+            </button>
+          </div>
         </div>
       )}
 
@@ -87,7 +114,7 @@ const MainAppContent: React.FC = () => {
       {/* Floating Active Trip Pill (visible on other tabs when ride is active) */}
       {activeRide && activeTab !== 'RIDES' && (
         <div className="sticky top-20 z-30 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-3">
-          <div 
+          <div
             onClick={() => setActiveTab('RIDES')}
             className="cursor-pointer p-3.5 px-5 rounded-2xl bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 border border-emerald-500/60 shadow-xl flex items-center justify-between gap-4 hover:border-emerald-400 transition group"
           >
@@ -122,6 +149,9 @@ const MainAppContent: React.FC = () => {
         {activeTab === 'MARKETPLACE' && <Marketplace />}
         {activeTab === 'RIDES' && <ActiveRides onNavigateToHub={() => setActiveTab('MOBILITY')} />}
       </main>
+
+      {/* Email & Google Login Modal */}
+      <LoginModal />
 
       {/* Student Profile Modal */}
       <ProfileModal
@@ -160,10 +190,10 @@ const MainAppContent: React.FC = () => {
             </div>
             <span className="text-slate-700">•</span>
             <button
-              onClick={() => setShowProfileModal(true)}
+              onClick={openLoginModal}
               className="text-slate-300 hover:text-white underline"
             >
-              Student Credentials &amp; Demo Switcher
+              Login with Email ID
             </button>
           </div>
         </div>
@@ -174,10 +204,12 @@ const MainAppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppProvider>
-        <MainAppContent />
-      </AppProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <AppProvider>
+          <MainAppContent />
+        </AppProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
