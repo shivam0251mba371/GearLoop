@@ -51,6 +51,14 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const inFlightProfileSyncs = new Map<string, Promise<UserProfile>>();
+
+function getCurrentHostname(): string {
+  return typeof window !== 'undefined' && window.location?.hostname
+    ? window.location.hostname
+    : 'this domain';
+}
+
 function mapFirebaseAuthError(error: unknown): { message: string; code: string } {
   const errObj = error as { code?: string; message?: string };
   const code = errObj?.code || 'auth/unknown';
@@ -59,7 +67,7 @@ function mapFirebaseAuthError(error: unknown): { message: string; code: string }
       return {
         code,
         message:
-          'Email/Password sign-in is not yet enabled in your Firebase Console (Authentication → Sign-in method → Email/Password). You can enable it there or use "Continue with Google" below with your email ID.'
+          'Email/Password sign-in is not enabled yet in Firebase Authentication. Enable it in Firebase Console or use "Continue with Google" below.'
       };
     case 'auth/invalid-email':
       return { code, message: 'Please enter a valid email address.' };
@@ -81,7 +89,7 @@ function mapFirebaseAuthError(error: unknown): { message: string; code: string }
     case 'auth/unauthorized-domain':
       return {
         code,
-        message: 'This domain is not authorized in Firebase Auth settings. Check Firebase Console → Authentication → Settings → Authorized domains.'
+        message: `Domain "${getCurrentHostname()}" is not yet authorized in Firebase Authentication. Add it under Firebase Console → Authentication → Settings → Authorized domains.`
       };
     case 'auth/too-many-requests':
       return { code, message: 'Too many login attempts. Please wait a moment and try again.' };
@@ -92,10 +100,14 @@ function mapFirebaseAuthError(error: unknown): { message: string; code: string }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    const loggedOut = localStorage.getItem('gearloop_explicit_logout') === 'true';
-    if (loggedOut) return null;
+    const isDemoMode = localStorage.getItem('gearloop_demo_mode') === 'true';
+    if (!isDemoMode) return null;
     const saved = localStorage.getItem('gearloop_current_user');
-    return saved ? JSON.parse(saved) : DEFAULT_USER;
+    try {
+      return saved ? (JSON.parse(saved) as UserProfile) : DEFAULT_USER;
+    } catch {
+      return null;
+    }
   });
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -107,7 +119,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('gearloop_current_user', JSON.stringify(currentUser));
-      localStorage.removeItem('gearloop_explicit_logout');
     } else {
       localStorage.removeItem('gearloop_current_user');
     }
@@ -121,21 +132,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const syncFirebaseUserToProfile = useCallback(
     async (user: FirebaseUser, preferredHub?: string): Promise<UserProfile> => {
-      const email = (user.email || '').trim();
-      const isVerifiedStudent = verifyStudentDomain(email);
-      const fallbackName = user.displayName?.trim() || email.split('@')[0] || 'GearLoop User';
-      const fallbackPhoto =
-        user.photoURL ||
-        `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=10b981&color=0f172a&bold=true`;
+      // Deduplicate concurrent calls (e.g. onAuthStateChanged + loginWithGoogle firing together)
+      // to prevent duplicate setDoc() writes to users/{uid}
+      const existingSync = inFlightProfileSyncs.get(user.uid);
+      if (existingSync) {
+        return existingSync;
+      }
 
-      // Try loading existing Firestore profile if user's email is verified
-      const userDocPath = `users/${user.uid}`;
-      if (user.emailVerified) {
-        try {
-          const snap = await getDoc(doc(db, 'users', user.uid));
+      const syncPromise = (async (): Promise<UserProfile> => {
+        const email = (user.email || '').trim();
+        const isVerifiedStudent = verifyStudentDomain(email);
+        const fallbackName = (user.displayName?.trim() || email.split('@')[0] || 'GearLoop User').slice(0, 100);
+        const fallbackPhoto = (
+          user.photoURL ||
+          `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=10b981&color=0f172a&bold=true`
+        ).slice(0, 500);
+
+        const buildFallbackProfile = (): UserProfile => ({
+          uid: user.uid,
+          displayName: fallbackName,
+          email,
+          photoURL: fallbackPhoto,
+          isVerifiedStudent,
+          hostelHub: (preferredHub || 'Main Campus Gate Dock').slice(0, 100),
+          activePlan: isVerifiedStudent ? 'TRIAL_3DAY' : 'NONE',
+          planExpiryDate: isVerifiedStudent
+            ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
+            : undefined,
+          walletBalance: 300,
+          phone: '',
+          upiId: `${email.split('@')[0] || 'student'}@okaxis`.slice(0, 100),
+          studentId: isVerifiedStudent ? 'DGU-VERIFIED' : 'EMAIL_MEMBER',
+          department: isVerifiedStudent ? 'DBS Global University' : 'Registered Email Account',
+          createdAt: new Date().toISOString()
+        });
+
+        const userDocPath = `users/${user.uid}`;
+        const userRef = doc(db, 'users', user.uid);
+
+        if (user.emailVerified) {
+          let snap;
+          try {
+            snap = await getDoc(userRef);
+          } catch (err) {
+            if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+              handleFirestoreError(err, OperationType.GET, userDocPath);
+            }
+            console.warn('Firestore profile read skipped, using authenticated Auth profile:', err);
+            return buildFallbackProfile();
+          }
+
           if (snap.exists()) {
             const data = snap.data();
-            const loaded: UserProfile = {
+            return {
               uid: user.uid,
               displayName: String(data.displayName || fallbackName),
               email: String(data.email || email),
@@ -154,15 +203,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   ? data.createdAt
                   : data.createdAt?.toDate?.()?.toISOString?.() || new Date().toISOString()
             };
-            return loaded;
           }
 
           // Create fresh Firestore profile adhering strictly to firebase-blueprint.json & firestore.rules
+          const safeEmail = (email.length >= 3 ? email : `${user.uid}@gearloop.app`).slice(0, 150);
           const newDocPayload = {
             uid: user.uid,
-            displayName: fallbackName.slice(0, 100),
-            email: email.slice(0, 150),
-            photoURL: fallbackPhoto.slice(0, 500),
+            displayName: fallbackName,
+            email: safeEmail,
+            photoURL: fallbackPhoto,
             isVerifiedStudent,
             hostelHub: (preferredHub || 'Main Campus Gate Dock').slice(0, 100),
             activePlan: isVerifiedStudent ? 'TRIAL_3DAY' : 'NONE',
@@ -171,55 +220,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               : null,
             walletBalance: 300,
             phone: '',
-            upiId: `${email.split('@')[0] || 'student'}@okaxis`.slice(0, 100),
+            upiId: `${safeEmail.split('@')[0] || 'student'}@okaxis`.slice(0, 100),
             studentId: isVerifiedStudent ? 'DGU-VERIFIED' : 'PENDING_VERIFICATION',
             department: isVerifiedStudent ? 'DBS Global University' : 'Campus Member',
             createdAt: serverTimestamp()
           };
-          await setDoc(doc(db, 'users', user.uid), newDocPayload);
-          return {
-            uid: user.uid,
-            displayName: newDocPayload.displayName,
-            email: newDocPayload.email,
-            photoURL: newDocPayload.photoURL,
-            isVerifiedStudent: newDocPayload.isVerifiedStudent,
-            hostelHub: newDocPayload.hostelHub,
-            activePlan: newDocPayload.activePlan as PlanType,
-            planExpiryDate: newDocPayload.planExpiryDate || undefined,
-            walletBalance: newDocPayload.walletBalance,
-            phone: newDocPayload.phone,
-            upiId: newDocPayload.upiId,
-            studentId: newDocPayload.studentId,
-            department: newDocPayload.department,
-            createdAt: new Date().toISOString()
-          };
-        } catch (err) {
-          if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
-            handleFirestoreError(err, OperationType.WRITE, userDocPath);
-          }
-          console.warn('Firestore profile sync skipped, using authenticated Auth profile:', err);
-        }
-      }
 
-      // Fresh profile from Auth user (never inherit DEFAULT_USER fields!)
-      return {
-        uid: user.uid,
-        displayName: fallbackName,
-        email,
-        photoURL: fallbackPhoto,
-        isVerifiedStudent,
-        hostelHub: preferredHub || 'Main Campus Gate Dock',
-        activePlan: isVerifiedStudent ? 'TRIAL_3DAY' : 'NONE',
-        planExpiryDate: isVerifiedStudent
-          ? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
-          : undefined,
-        walletBalance: 300,
-        phone: '',
-        upiId: `${email.split('@')[0] || 'student'}@okaxis`,
-        studentId: isVerifiedStudent ? 'DGU-VERIFIED' : 'EMAIL_MEMBER',
-        department: isVerifiedStudent ? 'DBS Global University' : 'Registered Email Account',
-        createdAt: new Date().toISOString()
-      };
+          try {
+            await setDoc(userRef, newDocPayload);
+            return {
+              uid: user.uid,
+              displayName: newDocPayload.displayName,
+              email: newDocPayload.email,
+              photoURL: newDocPayload.photoURL,
+              isVerifiedStudent: newDocPayload.isVerifiedStudent,
+              hostelHub: newDocPayload.hostelHub,
+              activePlan: newDocPayload.activePlan as PlanType,
+              planExpiryDate: newDocPayload.planExpiryDate || undefined,
+              walletBalance: newDocPayload.walletBalance,
+              phone: newDocPayload.phone,
+              upiId: newDocPayload.upiId,
+              studentId: newDocPayload.studentId,
+              department: newDocPayload.department,
+              createdAt: new Date().toISOString()
+            };
+          } catch (err) {
+            if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+              handleFirestoreError(err, OperationType.CREATE, userDocPath);
+            }
+            console.warn('Firestore profile create skipped, using authenticated Auth profile:', err);
+          }
+        }
+
+        return buildFallbackProfile();
+      })();
+
+      inFlightProfileSyncs.set(user.uid, syncPromise);
+      try {
+        return await syncPromise;
+      } finally {
+        inFlightProfileSyncs.delete(user.uid);
+      }
     },
     [verifyStudentDomain]
   );
@@ -228,9 +269,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (user) {
-        localStorage.removeItem('gearloop_explicit_logout');
-        const profile = await syncFirebaseUserToProfile(user);
-        setCurrentUser(profile);
+        localStorage.removeItem('gearloop_demo_mode');
+        try {
+          const profile = await syncFirebaseUserToProfile(user);
+          setCurrentUser(profile);
+        } catch (err) {
+          console.error('Error syncing authenticated user profile:', err);
+        }
+      } else {
+        const isDemoMode = localStorage.getItem('gearloop_demo_mode') === 'true';
+        if (!isDemoMode) {
+          setCurrentUser(null);
+        }
       }
       setLoading(false);
     });
@@ -245,6 +295,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setAuthBusy(true);
       const result = await signInWithPopup(auth, googleProvider);
+      localStorage.removeItem('gearloop_demo_mode');
       const profile = await syncFirebaseUserToProfile(result.user);
       setFirebaseUser(result.user);
       setCurrentUser(profile);
@@ -269,6 +320,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setAuthBusy(true);
       const result = await signInWithEmailAndPassword(auth, trimmedEmail, password);
+      localStorage.removeItem('gearloop_demo_mode');
       const profile = await syncFirebaseUserToProfile(result.user);
       setFirebaseUser(result.user);
       setCurrentUser(profile);
@@ -302,6 +354,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setAuthBusy(true);
       const result = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
+      localStorage.removeItem('gearloop_demo_mode');
       await updateProfile(result.user, { displayName: trimmedName.slice(0, 100) });
       try {
         await sendEmailVerification(result.user);
@@ -375,7 +428,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.error(e);
     }
-    localStorage.setItem('gearloop_explicit_logout', 'true');
+    localStorage.removeItem('gearloop_demo_mode');
+    localStorage.removeItem('gearloop_current_user');
     setFirebaseUser(null);
     setCurrentUser(null);
   };
@@ -384,16 +438,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUser((prev) => (prev ? { ...prev, ...updates } : null));
 
     if (auth.currentUser && auth.currentUser.emailVerified) {
-      const userPath = `users/${auth.currentUser.uid}`;
+      const user = auth.currentUser;
+      const userPath = `users/${user.uid}`;
+      const userRef = doc(db, 'users', user.uid);
       try {
+        const existingSnap = await getDoc(userRef);
+
+        if (!existingSnap.exists()) {
+          const baseProfile = await syncFirebaseUserToProfile(user, updates.hostelHub);
+          const merged = { ...baseProfile, ...updates };
+          const safeEmail = (merged.email && merged.email.length >= 3 ? merged.email : `${user.uid}@gearloop.app`).slice(0, 150);
+          await setDoc(userRef, {
+            uid: user.uid,
+            displayName: (merged.displayName?.trim() || 'GearLoop User').slice(0, 100),
+            email: safeEmail,
+            photoURL: (merged.photoURL || '').slice(0, 500),
+            isVerifiedStudent: Boolean(merged.isVerifiedStudent),
+            hostelHub: (merged.hostelHub?.trim() || 'Main Campus Gate Dock').slice(0, 100),
+            activePlan: merged.activePlan || 'NONE',
+            planExpiryDate: merged.planExpiryDate ?? null,
+            walletBalance: typeof merged.walletBalance === 'number' ? merged.walletBalance : 300,
+            phone: (merged.phone || '').slice(0, 30),
+            upiId: (merged.upiId || '').slice(0, 100),
+            studentId: (merged.studentId || '').slice(0, 64),
+            department: (merged.department || '').slice(0, 100),
+            createdAt: serverTimestamp()
+          });
+          return;
+        }
+
         const sanitizedUpdates: Record<string, unknown> = {
           updatedAt: serverTimestamp()
         };
-        if (updates.displayName !== undefined) sanitizedUpdates.displayName = updates.displayName.slice(0, 100);
+        if (updates.displayName !== undefined && updates.displayName.trim().length > 0) {
+          sanitizedUpdates.displayName = updates.displayName.trim().slice(0, 100);
+        }
         if (updates.photoURL !== undefined) sanitizedUpdates.photoURL = updates.photoURL.slice(0, 500);
-        if (updates.hostelHub !== undefined) sanitizedUpdates.hostelHub = updates.hostelHub.slice(0, 100);
+        if (updates.hostelHub !== undefined && updates.hostelHub.trim().length > 0) {
+          sanitizedUpdates.hostelHub = updates.hostelHub.trim().slice(0, 100);
+        }
         if (updates.activePlan !== undefined) sanitizedUpdates.activePlan = updates.activePlan;
-        if (updates.planExpiryDate !== undefined) sanitizedUpdates.planExpiryDate = updates.planExpiryDate;
+        if (updates.planExpiryDate !== undefined) sanitizedUpdates.planExpiryDate = updates.planExpiryDate ?? null;
         if (updates.walletBalance !== undefined) sanitizedUpdates.walletBalance = updates.walletBalance;
         if (updates.phone !== undefined) sanitizedUpdates.phone = updates.phone.slice(0, 30);
         if (updates.upiId !== undefined) sanitizedUpdates.upiId = updates.upiId.slice(0, 100);
@@ -401,7 +486,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (updates.department !== undefined) sanitizedUpdates.department = updates.department.slice(0, 100);
         if (updates.isVerifiedStudent !== undefined) sanitizedUpdates.isVerifiedStudent = updates.isVerifiedStudent;
 
-        await updateDoc(doc(db, 'users', auth.currentUser.uid), sanitizedUpdates);
+        await updateDoc(userRef, sanitizedUpdates);
       } catch (err) {
         if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
           handleFirestoreError(err, OperationType.UPDATE, userPath);
@@ -420,12 +505,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const switchDemoProfile = (type: 'verified-dgu' | 'monthly-dgu' | 'unverified-guest') => {
-    // If switching to a demo profile while signed in with Firebase, sign out of Firebase cleanly first
     if (auth.currentUser) {
       void signOut(auth);
       setFirebaseUser(null);
     }
-    localStorage.removeItem('gearloop_explicit_logout');
+    localStorage.setItem('gearloop_demo_mode', 'true');
 
     if (type === 'verified-dgu') {
       setCurrentUser({

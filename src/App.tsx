@@ -16,11 +16,13 @@ import {
   CheckCircle2,
   ArrowRight,
   Mail,
+  LogIn,
+  LogOut,
   X
 } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
-  const { currentUser, isDemoSession, openLoginModal } = useAuth();
+  const { currentUser, isDemoSession, openLoginModal, logout } = useAuth();
   const {
     activeRide,
     activeRideElapsedSeconds,
@@ -189,12 +191,31 @@ const MainAppContent: React.FC = () => {
               <span>@dgu.ac.in Verified Network</span>
             </div>
             <span className="text-slate-700">•</span>
-            <button
-              onClick={openLoginModal}
-              className="text-slate-300 hover:text-white underline"
-            >
-              Login with Email ID
-            </button>
+            {currentUser && !isDemoSession ? (
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowProfileModal(true)}
+                  className="text-slate-300 hover:text-white font-medium transition"
+                >
+                  {currentUser.email}
+                </button>
+                <button
+                  onClick={() => void logout()}
+                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-rose-400 hover:text-rose-300 font-semibold inline-flex items-center gap-1 transition"
+                >
+                  <LogOut className="w-3 h-3" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={openLoginModal}
+                className="px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 font-bold inline-flex items-center gap-1.5 transition"
+              >
+                <LogIn className="w-3 h-3" />
+                <span>Sign In / Register</span>
+              </button>
+            )}
           </div>
         </div>
       </footer>

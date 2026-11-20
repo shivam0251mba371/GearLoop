@@ -3,6 +3,7 @@ import confetti from 'canvas-confetti';
 import {
   collection,
   doc,
+  getDoc,
   onSnapshot,
   setDoc,
   updateDoc,
@@ -255,16 +256,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const rentalPath = `rentals/${rentalId}`;
       void (async () => {
         try {
-          // Ensure vehicle doc exists before rental creation (Global Consistency Invariant)
-          await setDoc(doc(db, 'vehicles', vehicleId), {
-            vehicleId: vehicle.vehicleId,
-            type: vehicle.type,
-            modelName: vehicle.modelName.slice(0, 120),
-            currentHub: vehicle.currentHub.slice(0, 100),
-            status: 'IN_USE',
-            batteryPercent: vehicle.batteryPercent,
-            qrCodeKey: vehicle.qrCodeKey
-          });
+          const vehicleRef = doc(db, 'vehicles', vehicleId);
+          const vSnap = await getDoc(vehicleRef);
+          if (vSnap.exists()) {
+            await updateDoc(vehicleRef, {
+              status: 'IN_USE',
+              currentHub: vehicle.currentHub.slice(0, 100),
+              batteryPercent: vehicle.batteryPercent
+            });
+          } else {
+            await setDoc(vehicleRef, {
+              vehicleId: vehicle.vehicleId,
+              type: vehicle.type,
+              modelName: vehicle.modelName.slice(0, 120),
+              currentHub: vehicle.currentHub.slice(0, 100),
+              status: 'IN_USE',
+              batteryPercent: vehicle.batteryPercent,
+              qrCodeKey: vehicle.qrCodeKey
+            });
+          }
           await setDoc(doc(db, 'rentals', rentalId), {
             ...newRental,
             userId: firebaseUser.uid
@@ -331,22 +341,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    if (canWriteToFirestore) {
+    if (canWriteToFirestore && firebaseUser) {
       void (async () => {
         try {
-          await updateDoc(doc(db, 'vehicles', activeRide.vehicleId), {
-            status: 'AVAILABLE',
-            currentHub: dropHubName.slice(0, 100),
-            batteryPercent: nextBattery
-          });
-          await updateDoc(doc(db, 'rentals', activeRide.rentalId), {
-            endTime,
-            dropHub: dropHubName.slice(0, 100),
-            durationMinutes,
-            distanceKm,
-            carbonSavedKg,
-            totalCost
-          });
+          const vehicleRef = doc(db, 'vehicles', activeRide.vehicleId);
+          const vSnap = await getDoc(vehicleRef);
+          if (vSnap.exists()) {
+            await updateDoc(vehicleRef, {
+              status: 'AVAILABLE',
+              currentHub: dropHubName.slice(0, 100),
+              batteryPercent: nextBattery
+            });
+          }
+          const rentalRef = doc(db, 'rentals', activeRide.rentalId);
+          const rSnap = await getDoc(rentalRef);
+          if (
+            rSnap.exists() &&
+            rSnap.data().userId === firebaseUser.uid &&
+            rSnap.data().endTime === null
+          ) {
+            await updateDoc(rentalRef, {
+              endTime,
+              dropHub: dropHubName.slice(0, 100),
+              durationMinutes,
+              distanceKm,
+              carbonSavedKg,
+              totalCost
+            });
+          }
         } catch (err) {
           if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
             handleFirestoreError(err, OperationType.UPDATE, `rentals/${activeRide.rentalId}`);
@@ -474,17 +496,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (canWriteToFirestore && firebaseUser) {
-      void updateDoc(doc(db, 'marketplace_items', itemId), {
-        status: 'ESCROW_PENDING',
-        isEscrowHeld: true,
-        escrowBuyerId: firebaseUser.uid,
-        escrowBuyerName: buyerName,
-        escrowCode
-      }).catch((err) => {
-        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
-          handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+      void (async () => {
+        try {
+          const itemRef = doc(db, 'marketplace_items', itemId);
+          const snap = await getDoc(itemRef);
+          if (snap.exists() && snap.data().status === 'AVAILABLE') {
+            await updateDoc(itemRef, {
+              status: 'ESCROW_PENDING',
+              isEscrowHeld: true,
+              escrowBuyerId: firebaseUser.uid,
+              escrowBuyerName: buyerName,
+              escrowCode
+            });
+          }
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+            handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+          }
         }
-      });
+      })();
     }
 
     showToast(
@@ -507,15 +537,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    if (canWriteToFirestore) {
-      void updateDoc(doc(db, 'marketplace_items', itemId), {
-        status: 'SOLD',
-        isEscrowHeld: false
-      }).catch((err) => {
-        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
-          handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+    if (canWriteToFirestore && firebaseUser) {
+      void (async () => {
+        try {
+          const itemRef = doc(db, 'marketplace_items', itemId);
+          const snap = await getDoc(itemRef);
+          if (
+            snap.exists() &&
+            snap.data().status === 'ESCROW_PENDING' &&
+            (snap.data().escrowBuyerId === firebaseUser.uid ||
+              snap.data().sellerId === firebaseUser.uid)
+          ) {
+            await updateDoc(itemRef, {
+              status: 'SOLD',
+              isEscrowHeld: false
+            });
+          }
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+            handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+          }
         }
-      });
+      })();
     }
 
     showToast('Handover confirmed! GearShield escrow funds released to seller.');
@@ -546,18 +589,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    if (canWriteToFirestore) {
-      void updateDoc(doc(db, 'marketplace_items', itemId), {
-        status: 'AVAILABLE',
-        isEscrowHeld: false,
-        escrowBuyerId: null,
-        escrowBuyerName: null,
-        escrowCode: null
-      }).catch((err) => {
-        if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
-          handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+    if (canWriteToFirestore && firebaseUser) {
+      void (async () => {
+        try {
+          const itemRef = doc(db, 'marketplace_items', itemId);
+          const snap = await getDoc(itemRef);
+          if (
+            snap.exists() &&
+            snap.data().status === 'ESCROW_PENDING' &&
+            (snap.data().escrowBuyerId === firebaseUser.uid ||
+              snap.data().sellerId === firebaseUser.uid)
+          ) {
+            await updateDoc(itemRef, {
+              status: 'AVAILABLE',
+              isEscrowHeld: false,
+              escrowBuyerId: null,
+              escrowBuyerName: null,
+              escrowCode: null
+            });
+          }
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Missing or insufficient permissions')) {
+            handleFirestoreError(err, OperationType.UPDATE, `marketplace_items/${itemId}`);
+          }
         }
-      });
+      })();
     }
 
     showToast('Escrow cancelled. Refund processed to student wallet / UPI.');

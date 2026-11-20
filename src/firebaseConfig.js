@@ -3,6 +3,8 @@ import app, {
   db,
   googleProvider,
   isConfigured,
+  firebaseProjectId,
+  firebaseAuthDomain,
   handleFirestoreError,
   OperationType
 } from './firebaseConfig.ts';
@@ -13,6 +15,8 @@ export {
   db,
   googleProvider,
   isConfigured,
+  firebaseProjectId,
+  firebaseAuthDomain,
   handleFirestoreError,
   OperationType
 };
